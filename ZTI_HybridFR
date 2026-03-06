@@ -36,10 +36,10 @@ $DateTime = $(invoke-restmethod -UseBasicParsing -Uri $TimeServerUrl).datetime
 Set-Date -Date $DateTime
 
 # Download required files
-$oa3tool = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embex/oa3tool.exe'
-$pcpksp = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embex/PCPKsp.dll'
-$inputxml = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embex/input.xml'
-$oa3cfg = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embex/OA3.cfg'
+$oa3tool = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/oa3tool.exe'
+$pcpksp = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
+$inputxml = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/input.xml'
+$oa3cfg = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
 
 Invoke-WebRequest $oa3tool -OutFile $PSScriptRoot\oa3tool.exe
 Invoke-WebRequest $pcpksp -OutFile X:\Windows\System32\PCPKsp.dll
