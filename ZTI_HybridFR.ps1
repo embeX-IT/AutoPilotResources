@@ -10,7 +10,7 @@ $TimeServerUrl = "https://time.now/developer/api/timezone/Europe/Berlin"
 # TLS 1.2 erzwingen
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Variablen lesen - Process-Scope zuerst (wird von Startnet.cmd vererbt)
+# Variablen lesen - Process-Scope zuerst
 $TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Process')
 $AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Process')
 $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret', 'Process')
@@ -54,7 +54,7 @@ $Global:MyOSDCloud = [ordered]@{
     CheckSHA1 = [bool]$True
 }
 
-Write-Host "Autopilot Device Registration Version 3.0" -ForegroundColor Cyan
+Write-Host "Autopilot Device Registration Version 4.0" -ForegroundColor Cyan
 
 # Zeitzone setzen
 Set-TimeZone -Id $TimeZone
@@ -73,68 +73,35 @@ for ($i = 1; $i -le $maxRetries; $i++) {
         break
     } catch {
         Write-Host "Versuch $i fehlgeschlagen: $_" -ForegroundColor Yellow
-        if ($i -lt $maxRetries) {
-            Write-Host "Warte $retryDelay Sekunden..." -ForegroundColor Yellow
-            Start-Sleep -Seconds $retryDelay
-        }
+        if ($i -lt $maxRetries) { Start-Sleep -Seconds $retryDelay }
     }
 }
 if (-not $timeSet) {
-    Write-Host "Zeitserver nach $maxRetries Versuchen nicht erreichbar, fahre ohne Zeitkorrektur fort." -ForegroundColor Yellow
+    Write-Host "Zeitserver nicht erreichbar, fahre ohne Zeitkorrektur fort." -ForegroundColor Yellow
 }
 
-# SetupComplete-Script schreiben (Autopilot-Import nach Installation)
+# Autopilot Hash hochladen via Get-WindowsAutoPilotInfo
 if (-not [string]::IsNullOrEmpty($TenantID) -and -not [string]::IsNullOrEmpty($AppID) -and -not [string]::IsNullOrEmpty($AppSecret)) {
-    Write-Host "Schreibe SetupComplete-Script für Autopilot-Import..." -ForegroundColor Cyan
+    Write-Host "Starte Autopilot-Import..." -ForegroundColor Cyan
+    try {
+        # PSGallery Support
+        Invoke-Expression (Invoke-RestMethod sandbox.osdcloud.com)
 
-    $setupCompletePS1 = @"
-Set-ExecutionPolicy Bypass -Scope Process -Force
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Install-Script -Name Get-WindowsAutoPilotInfo -Force -Scope AllUsers
 
-`$AppId     = '$AppID'
-`$AppSecret = '$AppSecret'
-`$TenantId  = '$TenantID'
-`$GroupTag  = '$GroupTag'
+        Get-WindowsAutoPilotInfo `
+            -Online `
+            -GroupTag $GroupTag `
+            -TenantId $TenantID `
+            -AppId $AppID `
+            -AppSecret $AppSecret
 
-try {
-    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-    Install-Module Microsoft.Graph.Authentication -Force -SkipPublisherCheck
-    Install-Module Microsoft.Graph.DeviceManagement.Enrollment -Force -SkipPublisherCheck
-
-    `$SecureSecret = ConvertTo-SecureString `$AppSecret -AsPlainText -Force
-    `$Cred = New-Object System.Management.Automation.PSCredential(`$AppId, `$SecureSecret)
-    Connect-MgGraph -TenantId `$TenantId -ClientSecretCredential `$Cred -NoWelcome
-
-    `$serial = (Get-WmiObject -Class Win32_BIOS).SerialNumber
-    `$hash   = (Get-WmiObject -Namespace root/cimv2/mdm/dmmap -Class MDM_DevDetail_Ext01 -Filter "InstanceID='Ext' AND ParentID='./DevDetail'").DeviceHardwareData
-
-    New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity ``
-        -SerialNumber `$serial ``
-        -HardwareIdentifier ([Convert]::FromBase64String(`$hash)) ``
-        -GroupTag `$GroupTag
-
-    Write-Host "Autopilot-Import erfolgreich fuer Serial: `$serial" -ForegroundColor Green
-} catch {
-    Write-Host "Autopilot-Import fehlgeschlagen: `$_" -ForegroundColor Red
-}
-
-# Script nach Ausführung löschen
-Remove-Item -Path 'C:\Windows\Setup\Scripts\SetupComplete.ps1' -Force -ErrorAction SilentlyContinue
-"@
-
-    $setupCompleteCMD = @"
-PowerShell -ExecutionPolicy Bypass -File C:\Windows\Setup\Scripts\SetupComplete.ps1 >> C:\OSDCloud\Logs\SetupComplete.log 2>&1
-"@
-
-    $scriptsPath = 'C:\Windows\Setup\Scripts'
-    if (-not (Test-Path $scriptsPath)) {
-        New-Item -Path $scriptsPath -ItemType Directory -Force | Out-Null
+        Write-Host "Autopilot-Import abgeschlossen." -ForegroundColor Green
+    } catch {
+        Write-Host "Autopilot-Import fehlgeschlagen: $_" -ForegroundColor Red
     }
-    $setupCompletePS1 | Out-File "$scriptsPath\SetupComplete.ps1" -Encoding UTF8
-    $setupCompleteCMD | Out-File "$scriptsPath\SetupComplete.cmd" -Encoding ASCII
-    Write-Host "SetupComplete-Scripts geschrieben nach $scriptsPath" -ForegroundColor Green
 } else {
-    Write-Host "FEHLER: Umgebungsvariablen fehlen - SetupComplete wird nicht geschrieben!" -ForegroundColor Red
+    Write-Host "FEHLER: Umgebungsvariablen fehlen - Autopilot-Import wird übersprungen." -ForegroundColor Red
 }
 
 Write-Host "Starte OSDCloud..." -ForegroundColor Cyan
