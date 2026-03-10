@@ -11,6 +11,33 @@ $TenantID = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID','Machine'
 $AppID = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID','Machine')
 $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret','Machine')
 
+#################
+# DEBUG - Umgebungsvariablen prüfen
+Write-Host "=== DEBUG ENV VARS ===" -ForegroundColor Cyan
+Write-Host "TenantID: '$TenantID'"
+Write-Host "AppID: '$AppID'"
+Write-Host "AppSecret length: $($AppSecret.Length)"
+Write-Host "=== END DEBUG ===" -ForegroundColor Cyan
+
+# Fallback: direkt aus Process-Scope versuchen
+if ([string]::IsNullOrEmpty($TenantID)) {
+    Write-Host "Machine-Scope leer, versuche Process-Scope..." -ForegroundColor Yellow
+    $TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Process')
+    $AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Process')
+    $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret', 'Process')
+    Write-Host "Process-Scope TenantID: '$TenantID'"
+}
+
+# Fallback: $env: versuchen
+if ([string]::IsNullOrEmpty($TenantID)) {
+    Write-Host "Process-Scope leer, versuche env:..." -ForegroundColor Yellow
+    $TenantID  = $env:OSDCloudAPTenantID
+    $AppID     = $env:OSDCloudAPAppID
+    $AppSecret = $env:OSDCloudAPAppSecret
+    Write-Host "env: TenantID: '$TenantID'"
+}
+
+##################
 #Set Global OSDCloud Vars
 $Global:MyOSDCloud = [ordered]@{
     BrandColor = "#0096FF"
