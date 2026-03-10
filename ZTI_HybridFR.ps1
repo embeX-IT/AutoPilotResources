@@ -7,7 +7,7 @@ $GroupTag = 'AutopilotHybridFR'
 $TimeZone = 'W. Europe Standard Time'
 $TimeServerUrl = "https://time.now/developer/api/timezone/Europe/Berlin"
 $OutputFile = "X:\AutopilotHash.csv"
-$TenantID = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID','Machine') # $env:OSDCloudAPTenantID doesn't work within WinPe
+$TenantID = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID','Machine')
 $AppID = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID','Machine')
 $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret','Machine')
 
@@ -27,75 +27,84 @@ $Global:MyOSDCloud = [ordered]@{
     CheckSHA1 = [bool]$True
 }
 
-# Largely reworked from https://github.com/jbedrech/WinPE_Autopilot/tree/main
-Write-Host "Autopilot Device Registration Version 1.0"
+Write-Host "Autopilot Device Registration Version 2.0"
 
 # Set the time
 Set-TimeZone -Id $TimeZone
-$DateTime = $(invoke-restmethod -UseBasicParsing -Uri $TimeServerUrl).datetime
+$DateTime = $(Invoke-RestMethod -UseBasicParsing -Uri $TimeServerUrl).datetime
 Set-Date -Date $DateTime
 
 # Download required files
 $oa3tool = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/oa3tool.exe'
-$pcpksp = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
+$pcpksp  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
 $inputxml = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/input.xml'
-$oa3cfg = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
+$oa3cfg  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
 
-Invoke-WebRequest $oa3tool -OutFile $PSScriptRoot\oa3tool.exe
-Invoke-WebRequest $pcpksp -OutFile X:\Windows\System32\PCPKsp.dll
+Invoke-WebRequest $oa3tool  -OutFile $PSScriptRoot\oa3tool.exe
+Invoke-WebRequest $pcpksp   -OutFile X:\Windows\System32\PCPKsp.dll
 Invoke-WebRequest $inputxml -OutFile $PSScriptRoot\input.xml
-Invoke-WebRequest $oa3cfg -OutFile $PSScriptRoot\OA3.cfg
+Invoke-WebRequest $oa3cfg   -OutFile $PSScriptRoot\OA3.cfg
 
 # Create OA3 Hash
-If((Test-Path X:\Windows\System32\wpeutil.exe) -and (Test-Path X:\Windows\System32\PCPKsp.dll))
-{
- #Register PCPKsp
- rundll32 X:\Windows\System32\PCPKsp.dll,DllInstall
+If ((Test-Path X:\Windows\System32\wpeutil.exe) -and (Test-Path X:\Windows\System32\PCPKsp.dll)) {
+    rundll32 X:\Windows\System32\PCPKsp.dll,DllInstall
 }
 
-#Change Current Diretory so OA3Tool finds the files written in the Config File 
-&cd $PSScriptRoot
+Set-Location $PSScriptRoot
 
-#Get SN from WMI
 $serial = (Get-WmiObject -Class Win32_BIOS).SerialNumber
 
-#Run OA3Tool
 &$PSScriptRoot\oa3tool.exe /Report /ConfigFile=$PSScriptRoot\OA3.cfg /NoKeyCheck
 
-#Check if Hash was found
-If (Test-Path $PSScriptRoot\OA3.xml) 
-{
- #Read Hash from generated XML File
- [xml]$xmlhash = Get-Content -Path "$PSScriptRoot\OA3.xml"
- $hash=$xmlhash.Key.HardwareHash
+If (Test-Path $PSScriptRoot\OA3.xml) {
+    [xml]$xmlhash = Get-Content -Path "$PSScriptRoot\OA3.xml"
+    $hash = $xmlhash.Key.HardwareHash
 
- $computers = @()
- $product=""
- # Create a pipeline object
- $c = New-Object psobject -Property @{
-  "Device Serial Number" = $serial
-  "Windows Product ID" = $product
-  "Hardware Hash" = $hash
-  "Group Tag" = $GroupTag
- }
- 
-  $computers += $c
- $computers | Select "Device Serial Number", "Windows Product ID", "Hardware Hash", "Group Tag" | ConvertTo-CSV -NoTypeInformation | % {$_ -replace '"',''} | Out-File $OutputFile
+    $computers = @()
+    $c = New-Object psobject -Property @{
+        "Device Serial Number" = $serial
+        "Windows Product ID"   = ""
+        "Hardware Hash"        = $hash
+        "Group Tag"            = $GroupTag
+    }
+    $computers += $c
+    $computers | Select-Object "Device Serial Number", "Windows Product ID", "Hardware Hash", "Group Tag" |
+        ConvertTo-Csv -NoTypeInformation |
+        ForEach-Object { $_ -replace '"', '' } |
+        Out-File $OutputFile
 }
 
 # Upload the hash
 Start-Sleep 30
 
-#Get Modules needed for Installation
-#PSGallery Support
-Invoke-Expression(Invoke-RestMethod sandbox.osdcloud.com)
-Install-Module WindowsAutoPilotIntune -SkipPublisherCheck -Force
+# PSGallery Support via OSDCloud sandbox
+Invoke-Expression (Invoke-RestMethod sandbox.osdcloud.com)
 
-#Connection
-Connect-MSGraphApp -Tenant $TenantId -AppId $AppId -AppSecret $AppSecret
+# Install Microsoft Graph modules
+Write-Host "Installing Microsoft Graph modules..."
+Install-Module Microsoft.Graph.Authentication -SkipPublisherCheck -Force
+Install-Module Microsoft.Graph.DeviceManagement.Enrollment -SkipPublisherCheck -Force
 
-#Import Autopilot CSV to Tenant
-Import-AutoPilotCSV -csvFile $OutputFile
+# Connect via App Registration (Client Credentials)
+Write-Host "Connecting to Microsoft Graph..."
+$SecureSecret = ConvertTo-SecureString $AppSecret -AsPlainText -Force
+$ClientCredential = New-Object System.Management.Automation.PSCredential($AppID, $SecureSecret)
+Connect-MgGraph -TenantId $TenantID -ClientSecretCredential $ClientCredential -NoWelcome
 
-Write-Host "Start-OSDCloud -OSName $OSName -OSEdition $OSEdition -OSActivation $OSActivation -OSLanguage $OSLanguage"
+# Import Autopilot Hash
+Write-Host "Importing Autopilot hash for serial: $serial"
+$csvData = Import-Csv $OutputFile
+
+foreach ($device in $csvData) {
+    $params = @{
+        "@odata.type"      = "#microsoft.graph.importedWindowsAutopilotDeviceIdentity"
+        serialNumber       = $device.'Device Serial Number'
+        hardwareIdentifier = $device.'Hardware Hash'
+        groupTag           = $device.'Group Tag'
+    }
+    New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity -BodyParameter $params
+}
+
+Write-Host "Autopilot import complete. Starting OSDCloud..."
+
 Start-OSDCloud -OSName $OSName -OSEdition $OSEdition -OSActivation $OSActivation -OSLanguage $OSLanguage
