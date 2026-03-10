@@ -7,37 +7,35 @@ $GroupTag = 'AutopilotHybridFR'
 $TimeZone = 'W. Europe Standard Time'
 $TimeServerUrl = "https://time.now/developer/api/timezone/Europe/Berlin"
 $OutputFile = "X:\AutopilotHash.csv"
-$TenantID = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID','Machine')
-$AppID = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID','Machine')
-$AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret','Machine')
 
-#################
-# DEBUG - Umgebungsvariablen prüfen
+# Variablen lesen - Process-Scope zuerst (wird von Startnet.cmd vererbt)
+$TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Process')
+$AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Process')
+$AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret', 'Process')
+
+# Fallback: Machine-Scope
+if ([string]::IsNullOrEmpty($TenantID)) {
+    Write-Host "Process-Scope leer, versuche Machine-Scope..." -ForegroundColor Yellow
+    $TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Machine')
+    $AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Machine')
+    $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret', 'Machine')
+}
+
+# Fallback: $env:
+if ([string]::IsNullOrEmpty($TenantID)) {
+    Write-Host "Machine-Scope leer, versuche env:..." -ForegroundColor Yellow
+    $TenantID  = $env:OSDCloudAPTenantID
+    $AppID     = $env:OSDCloudAPAppID
+    $AppSecret = $env:OSDCloudAPAppSecret
+}
+
+# DEBUG
 Write-Host "=== DEBUG ENV VARS ===" -ForegroundColor Cyan
 Write-Host "TenantID: '$TenantID'"
 Write-Host "AppID: '$AppID'"
 Write-Host "AppSecret length: $($AppSecret.Length)"
 Write-Host "=== END DEBUG ===" -ForegroundColor Cyan
 
-# Fallback: direkt aus Process-Scope versuchen
-if ([string]::IsNullOrEmpty($TenantID)) {
-    Write-Host "Machine-Scope leer, versuche Process-Scope..." -ForegroundColor Yellow
-    $TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Process')
-    $AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Process')
-    $AppSecret = [Environment]::GetEnvironmentVariable('OSDCloudAPAppSecret', 'Process')
-    Write-Host "Process-Scope TenantID: '$TenantID'"
-}
-
-# Fallback: $env: versuchen
-if ([string]::IsNullOrEmpty($TenantID)) {
-    Write-Host "Process-Scope leer, versuche env:..." -ForegroundColor Yellow
-    $TenantID  = $env:OSDCloudAPTenantID
-    $AppID     = $env:OSDCloudAPAppID
-    $AppSecret = $env:OSDCloudAPAppSecret
-    Write-Host "env: TenantID: '$TenantID'"
-}
-
-##################
 #Set Global OSDCloud Vars
 $Global:MyOSDCloud = [ordered]@{
     BrandColor = "#0096FF"
@@ -62,10 +60,10 @@ $DateTime = $(Invoke-RestMethod -UseBasicParsing -Uri $TimeServerUrl).datetime
 Set-Date -Date $DateTime
 
 # Download required files
-$oa3tool = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/oa3tool.exe'
-$pcpksp  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
+$oa3tool  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/oa3tool.exe'
+$pcpksp   = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
 $inputxml = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/input.xml'
-$oa3cfg  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
+$oa3cfg   = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
 
 Invoke-WebRequest $oa3tool  -OutFile $PSScriptRoot\oa3tool.exe
 Invoke-WebRequest $pcpksp   -OutFile X:\Windows\System32\PCPKsp.dll
@@ -101,7 +99,6 @@ If (Test-Path $PSScriptRoot\OA3.xml) {
         Out-File $OutputFile
 }
 
-# Upload the hash
 Start-Sleep 30
 
 # PSGallery Support via OSDCloud sandbox
@@ -112,26 +109,28 @@ Write-Host "Installing Microsoft Graph modules..."
 Install-Module Microsoft.Graph.Authentication -SkipPublisherCheck -Force
 Install-Module Microsoft.Graph.DeviceManagement.Enrollment -SkipPublisherCheck -Force
 
-# Connect via App Registration (Client Credentials)
-Write-Host "Connecting to Microsoft Graph..."
-$SecureSecret = ConvertTo-SecureString $AppSecret -AsPlainText -Force
-$ClientCredential = New-Object System.Management.Automation.PSCredential($AppID, $SecureSecret)
-Connect-MgGraph -TenantId $TenantID -ClientSecretCredential $ClientCredential -NoWelcome
+# Abbrechen wenn Vars fehlen
+if ([string]::IsNullOrEmpty($TenantID) -or [string]::IsNullOrEmpty($AppID) -or [string]::IsNullOrEmpty($AppSecret)) {
+    Write-Host "FEHLER: Umgebungsvariablen nicht gesetzt! Autopilot-Import wird übersprungen." -ForegroundColor Red
+} else {
+    # Connect via App Registration
+    Write-Host "Connecting to Microsoft Graph..." -ForegroundColor Cyan
+    $SecureSecret = ConvertTo-SecureString $AppSecret -AsPlainText -Force
+    $ClientCredential = New-Object System.Management.Automation.PSCredential($AppID, $SecureSecret)
+    Connect-MgGraph -TenantId $TenantID -ClientSecretCredential $ClientCredential -NoWelcome
 
-# Import Autopilot Hash
-Write-Host "Importing Autopilot hash for serial: $serial"
-$csvData = Import-Csv $OutputFile
+    # Import Autopilot Hash
+    Write-Host "Importing Autopilot hash for serial: $serial" -ForegroundColor Cyan
+    $csvData = Import-Csv $OutputFile
 
-foreach ($device in $csvData) {
-    $params = @{
-        "@odata.type"      = "#microsoft.graph.importedWindowsAutopilotDeviceIdentity"
-        serialNumber       = $device.'Device Serial Number'
-        hardwareIdentifier = $device.'Hardware Hash'
-        groupTag           = $device.'Group Tag'
+    foreach ($device in $csvData) {
+        $importedDevice = New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity `
+            -SerialNumber $device.'Device Serial Number' `
+            -HardwareIdentifier ([Convert]::FromBase64String($device.'Hardware Hash')) `
+            -GroupTag $device.'Group Tag'
+        Write-Host "Import Status: $($importedDevice.State.DeviceImportStatus)"
     }
-    New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity -BodyParameter $params
 }
 
-Write-Host "Autopilot import complete. Starting OSDCloud..."
-
+Write-Host "Starting OSDCloud..."
 Start-OSDCloud -OSName $OSName -OSEdition $OSEdition -OSActivation $OSActivation -OSLanguage $OSLanguage
