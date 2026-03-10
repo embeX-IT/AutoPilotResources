@@ -8,6 +8,9 @@ $TimeZone = 'W. Europe Standard Time'
 $TimeServerUrl = "https://time.now/developer/api/timezone/Europe/Berlin"
 $OutputFile = "X:\AutopilotHash.csv"
 
+# TLS 1.2 erzwingen
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # Variablen lesen - Process-Scope zuerst (wird von Startnet.cmd vererbt)
 $TenantID  = [Environment]::GetEnvironmentVariable('OSDCloudAPTenantID',  'Process')
 $AppID     = [Environment]::GetEnvironmentVariable('OSDCloudAPAppID',     'Process')
@@ -59,16 +62,19 @@ Set-TimeZone -Id $TimeZone
 $DateTime = $(Invoke-RestMethod -UseBasicParsing -Uri $TimeServerUrl).datetime
 Set-Date -Date $DateTime
 
-# Download required files
+# Download required files - WebClient statt Invoke-WebRequest (stabiler in WinPE)
 $oa3tool  = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/oa3tool.exe'
 $pcpksp   = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/PCPKsp.dll'
 $inputxml = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/input.xml'
 $oa3cfg   = 'https://raw.githubusercontent.com/embeX-IT/AutoPilotResources/embeX/OA3.cfg'
 
-Invoke-WebRequest $oa3tool  -OutFile $PSScriptRoot\oa3tool.exe
-Invoke-WebRequest $pcpksp   -OutFile X:\Windows\System32\PCPKsp.dll
-Invoke-WebRequest $inputxml -OutFile $PSScriptRoot\input.xml
-Invoke-WebRequest $oa3cfg   -OutFile $PSScriptRoot\OA3.cfg
+Write-Host "Downloading required files..." -ForegroundColor Cyan
+$webClient = New-Object System.Net.WebClient
+$webClient.DownloadFile($oa3tool,  "$PSScriptRoot\oa3tool.exe")
+$webClient.DownloadFile($pcpksp,   "X:\Windows\System32\PCPKsp.dll")
+$webClient.DownloadFile($inputxml, "$PSScriptRoot\input.xml")
+$webClient.DownloadFile($oa3cfg,   "$PSScriptRoot\OA3.cfg")
+Write-Host "Downloads complete." -ForegroundColor Green
 
 # Create OA3 Hash
 If ((Test-Path X:\Windows\System32\wpeutil.exe) -and (Test-Path X:\Windows\System32\PCPKsp.dll)) {
@@ -78,10 +84,12 @@ If ((Test-Path X:\Windows\System32\wpeutil.exe) -and (Test-Path X:\Windows\Syste
 Set-Location $PSScriptRoot
 
 $serial = (Get-WmiObject -Class Win32_BIOS).SerialNumber
+Write-Host "Serial Number: $serial" -ForegroundColor Cyan
 
 &$PSScriptRoot\oa3tool.exe /Report /ConfigFile=$PSScriptRoot\OA3.cfg /NoKeyCheck
 
 If (Test-Path $PSScriptRoot\OA3.xml) {
+    Write-Host "OA3.xml gefunden, lese Hash..." -ForegroundColor Green
     [xml]$xmlhash = Get-Content -Path "$PSScriptRoot\OA3.xml"
     $hash = $xmlhash.Key.HardwareHash
 
@@ -97,6 +105,9 @@ If (Test-Path $PSScriptRoot\OA3.xml) {
         ConvertTo-Csv -NoTypeInformation |
         ForEach-Object { $_ -replace '"', '' } |
         Out-File $OutputFile
+    Write-Host "CSV erstellt: $OutputFile" -ForegroundColor Green
+} else {
+    Write-Host "FEHLER: OA3.xml nicht gefunden! Hash konnte nicht generiert werden." -ForegroundColor Red
 }
 
 Start-Sleep 30
@@ -105,7 +116,7 @@ Start-Sleep 30
 Invoke-Expression (Invoke-RestMethod sandbox.osdcloud.com)
 
 # Install Microsoft Graph modules
-Write-Host "Installing Microsoft Graph modules..."
+Write-Host "Installing Microsoft Graph modules..." -ForegroundColor Cyan
 Install-Module Microsoft.Graph.Authentication -SkipPublisherCheck -Force
 Install-Module Microsoft.Graph.DeviceManagement.Enrollment -SkipPublisherCheck -Force
 
@@ -120,15 +131,19 @@ if ([string]::IsNullOrEmpty($TenantID) -or [string]::IsNullOrEmpty($AppID) -or [
     Connect-MgGraph -TenantId $TenantID -ClientSecretCredential $ClientCredential -NoWelcome
 
     # Import Autopilot Hash
-    Write-Host "Importing Autopilot hash for serial: $serial" -ForegroundColor Cyan
-    $csvData = Import-Csv $OutputFile
+    if (Test-Path $OutputFile) {
+        Write-Host "Importing Autopilot hash for serial: $serial" -ForegroundColor Cyan
+        $csvData = Import-Csv $OutputFile
 
-    foreach ($device in $csvData) {
-        $importedDevice = New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity `
-            -SerialNumber $device.'Device Serial Number' `
-            -HardwareIdentifier ([Convert]::FromBase64String($device.'Hardware Hash')) `
-            -GroupTag $device.'Group Tag'
-        Write-Host "Import Status: $($importedDevice.State.DeviceImportStatus)"
+        foreach ($device in $csvData) {
+            $importedDevice = New-MgDeviceManagementImportedWindowsAutopilotDeviceIdentity `
+                -SerialNumber $device.'Device Serial Number' `
+                -HardwareIdentifier ([Convert]::FromBase64String($device.'Hardware Hash')) `
+                -GroupTag $device.'Group Tag'
+            Write-Host "Import Status: $($importedDevice.State.DeviceImportStatus)" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "FEHLER: CSV nicht gefunden, Autopilot-Import übersprungen." -ForegroundColor Red
     }
 }
 
